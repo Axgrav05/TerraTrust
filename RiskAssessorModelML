@@ -1,0 +1,97 @@
+# Required Libraries
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
+import numpy as np
+import coremltools as ct
+from google.colab import files
+
+# Load datasets
+uploaded = files.upload()
+data = pd.read_csv('Data_1.csv')
+
+# Initialize MinMaxScaler for normalization
+scaler = MinMaxScaler()
+
+# Define columns that need normalization, including the encoded "Activity/Trend" column
+features = ['Unemployment Rates', 'Tornado MAG', 'Hail MAG', 
+                        'Wind MAG', 'Crime Volume', 'Soil Suitability (0-10)', 
+                        'Population Estimate', 'Single Family Building Permits TX', 
+                        'Activity/Trend (Encoded)', 'Hurricane Deaths', 'Median AQI']
+data[features] = scaler.fit_transform(data[features])
+
+# Define weights for each factor
+weights = {
+    'Unemployment Rates': 0.10,
+    'Tornado MAG': 0.05,
+    'Hail MAG': 0.02,
+    'Wind MAG': 0.05,
+    'Crime Volume': 0.15,
+    'Soil Suitability (0-10)': 0.10,
+    'Population Estimate': 0.10,
+    'Single Family Building Permits TX': 0.10,
+    'Activity/Trend (Encoded)': 0.15,
+    'Hurricane Deaths': 0.07,
+    'Median AQI': 0.11
+}
+
+# Calculate risk scores based on weighted factors
+def calculate_weighted_risk_score(row):
+    score = sum(row[feature] * weight for feature, weight in weights.items())
+    return score * 100  # Scale to a 0-100 range
+
+# Add a calculated 'Risk Score' column
+data['Risk Score'] = data.apply(calculate_weighted_risk_score, axis=1)
+
+# Define the model
+class RiskAssessmentModel(nn.Module):
+    def __init__(self):
+        super(RiskAssessmentModel, self).__init__()
+        self.fc1 = nn.Linear(len(features), 64)
+        self.fc2 = nn.Linear(64, 32)
+        self.output = nn.Linear(32, 1)
+    
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        return self.output(x)
+
+model = RiskAssessmentModel()
+criterion = nn.MSELoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+# Training process
+def train_model(model, data, epochs=100):
+    model.train()
+    for epoch in range(epochs):
+        total_loss = 0
+        for i in range(len(data)):
+            # Convert row to tensor
+            inputs = torch.tensor(data[features].iloc[i].values, dtype=torch.float32)
+            target = torch.tensor([data['Risk Score'].iloc[i]], dtype=torch.float32)
+            
+            optimizer.zero_grad()
+            output = model(inputs)
+            loss = criterion(output, target)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        if (epoch + 1) % 10 == 0:
+            print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss / len(data):.4f}")
+
+# Function to calculate risk score based on county
+def predict_risk_score(county):
+    model.eval()
+    county_data = data[data['County'] == county]
+    if county_data.empty:
+        return "County not found"
+    
+    inputs = torch.tensor(county_data[features].values[0], dtype=torch.float32)
+    with torch.no_grad():
+        risk_score = model(inputs).item()
+    return risk_score
+
+# Train the model
+train_model(model, data)
